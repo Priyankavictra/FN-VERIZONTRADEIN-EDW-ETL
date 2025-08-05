@@ -8,11 +8,22 @@ import os
 class VerizonTradeInETL:
     def create_tables_if_not_exist(self, conn):
         cursor = conn.cursor()
-        # Create staging table (all columns as NVARCHAR(255)), add TradeInDate_EST, PostTime_EST, ResponseTime_EST
+        
+        # Handle migration from old table name to new table name
         cursor.execute('''
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'RQTradeinReport_staging' AND TABLE_SCHEMA = 'verizon')
+        IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'RQTradeinReport_staging' AND TABLE_SCHEMA = 'verizon')
+        AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'RQTradeinReportStaging' AND TABLE_SCHEMA = 'verizon')
         BEGIN
-            CREATE TABLE verizon.RQTradeinReport_staging (
+            EXEC sp_rename 'verizon.RQTradeinReport_staging', 'RQTradeinReportStaging'
+        END
+        ''')
+        conn.commit()
+        
+        # Create staging table (all columns as NVARCHAR(255)), add TradeInDateEST, PostTimeEST, ResponseTimeEST
+        cursor.execute('''
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'RQTradeinReportStaging' AND TABLE_SCHEMA = 'verizon')
+        BEGIN
+            CREATE TABLE verizon.RQTradeinReportStaging (
                 SaleInvoiceID NVARCHAR(255),
                 TradeInTransactionID NVARCHAR(255),
                 InvoiceIDByStore NVARCHAR(255),
@@ -24,7 +35,7 @@ class VerizonTradeInETL:
                 StoreName NVARCHAR(255),
                 RegionName NVARCHAR(255),
                 TradeInDate NVARCHAR(255),
-                TradeInDate_EST NVARCHAR(255),
+                TradeInDateEST NVARCHAR(255),
                 PhoneRebateAmount NVARCHAR(255),
                 PromotionValue NVARCHAR(255),
                 PreDeviceValueAmount NVARCHAR(255),
@@ -53,15 +64,15 @@ class VerizonTradeInETL:
                 AmountPending NVARCHAR(255),
                 PromoCompletion NVARCHAR(255),
                 PostTime NVARCHAR(255),
-                PostTime_EST NVARCHAR(255),
+                PostTimeEST NVARCHAR(255),
                 ResponseTime NVARCHAR(255),
-                ResponseTime_EST NVARCHAR(255),
+                ResponseTimeEST NVARCHAR(255),
                 MobileNumber NVARCHAR(255),
-                ETLrowinserted DATETIME DEFAULT GETDATE()
+                ETLRowInserted DATETIME DEFAULT GETDATE()
             )
         END
         ''')
-        # Create target table with proper data types, add TradeInDate_EST, PostTime_EST, ResponseTime_EST
+        # Create target table with proper data types, add TradeInDateEST, PostTimeEST, ResponseTimeEST
         cursor.execute('''
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'RQTradeinReport' AND TABLE_SCHEMA = 'verizon')
         BEGIN
@@ -77,7 +88,7 @@ class VerizonTradeInETL:
                 StoreName NVARCHAR(100),
                 RegionName NVARCHAR(50),
                 TradeInDate NVARCHAR(50),
-                TradeInDate_EST NVARCHAR(50),
+                TradeInDateEST NVARCHAR(50),
                 PhoneRebateAmount DECIMAL(18,2),
                 PromotionValue DECIMAL(18,2),
                 PreDeviceValueAmount DECIMAL(18,2),
@@ -106,29 +117,61 @@ class VerizonTradeInETL:
                 AmountPending DECIMAL(18,2),
                 PromoCompletion NVARCHAR(20),
                 PostTime NVARCHAR(50),
-                PostTime_EST NVARCHAR(50),
+                PostTimeEST NVARCHAR(50),
                 ResponseTime NVARCHAR(50),
-                ResponseTime_EST NVARCHAR(50),
+                ResponseTimeEST NVARCHAR(50),
                 MobileNumber NVARCHAR(20),
-                ETLrowinserted DATETIME DEFAULT GETDATE(),
-                ETLrowupdated DATETIME
+                ETLRowInserted DATETIME DEFAULT GETDATE(),
+                ETLRowUpdated DATETIME
             )
         END
         ''')
-        # Add TradeInDate_EST, PostTime_EST, ResponseTime_EST columns to existing tables if missing
+        conn.commit()
+        
+        # Handle column name migration from old column names to new column names
+        column_migrations = [
+            ("TradeInDate_EST", "TradeInDateEST"),
+            ("PostTime_EST", "PostTimeEST"), 
+            ("ResponseTime_EST", "ResponseTimeEST")
+        ]
+        
+        for old_col, new_col in column_migrations:
+            try:
+                # Check if old column exists and new column doesn't exist in staging table
+                cursor.execute(f"""
+                IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'RQTradeinReportStaging' AND COLUMN_NAME = '{old_col}' AND TABLE_SCHEMA = 'verizon')
+                AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'RQTradeinReportStaging' AND COLUMN_NAME = '{new_col}' AND TABLE_SCHEMA = 'verizon')
+                BEGIN
+                    EXEC sp_rename 'verizon.RQTradeinReportStaging.{old_col}', '{new_col}', 'COLUMN'
+                END
+                """)
+                # Do the same for target table
+                cursor.execute(f"""
+                IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'RQTradeinReport' AND COLUMN_NAME = '{old_col}' AND TABLE_SCHEMA = 'verizon')
+                AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'RQTradeinReport' AND COLUMN_NAME = '{new_col}' AND TABLE_SCHEMA = 'verizon')
+                BEGIN
+                    EXEC sp_rename 'verizon.RQTradeinReport.{old_col}', '{new_col}', 'COLUMN'
+                END
+                """)
+            except Exception as e:
+                logging.warning(f"Could not migrate column {old_col} to {new_col}: {e}")
+        
+        conn.commit()
+        
+        # Add TradeInDateEST, PostTimeEST, ResponseTimeEST columns to existing tables if missing
         for col, dtype in [
-            ("TradeInDate_EST", "NVARCHAR(255)"),
-            ("PostTime_EST", "NVARCHAR(255)"),
-            ("ResponseTime_EST", "NVARCHAR(255)")
+            ("TradeInDateEST", "NVARCHAR(255)"),
+            ("PostTimeEST", "NVARCHAR(255)"),
+            ("ResponseTimeEST", "NVARCHAR(255)")
         ]:
             try:
-                cursor.execute(f"ALTER TABLE verizon.RQTradeinReport_staging ADD {col} {dtype};")
+                cursor.execute(f"ALTER TABLE verizon.RQTradeinReportStaging ADD {col} {dtype};")
             except Exception as e:
                 logging.warning(f"Could not add {col} to staging: {e}")
         for col, dtype in [
-            ("TradeInDate_EST", "NVARCHAR(50)"),
-            ("PostTime_EST", "NVARCHAR(50)"),
-            ("ResponseTime_EST", "NVARCHAR(50)")
+            ("TradeInDateEST", "NVARCHAR(50)"),
+            ("PostTimeEST", "NVARCHAR(50)"),
+            ("ResponseTimeEST", "NVARCHAR(50)")
         ]:
             try:
                 cursor.execute(f"ALTER TABLE verizon.RQTradeinReport ADD {col} {dtype};")
@@ -213,9 +256,9 @@ class VerizonTradeInETL:
         rows_loaded = 0
         logging.info(f"Loading data into staging table...")
         # Log actual columns in the table
-        cursor.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'RQTradeinReport_staging' AND TABLE_SCHEMA = 'verizon'")
+        cursor.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'RQTradeinReportStaging' AND TABLE_SCHEMA = 'verizon'")
         table_columns = [row[0] for row in cursor.fetchall()]
-        logging.info(f"Actual columns in verizon.RQTradeinReport_staging: {table_columns}")
+        logging.info(f"Actual columns in verizon.RQTradeinReportStaging: {table_columns}")
         # Only insert columns that exist in the table
         import datetime
         def to_est(raw):
@@ -287,9 +330,9 @@ class VerizonTradeInETL:
             est_post = to_est(row.get('PostTime', None))
             est_response = to_est(row.get('ResponseTime', None))
             # Always fill EST columns: use EST value if conversion succeeds, else fallback to original value
-            valid_row['TradeInDate_EST'] = est_tradein if est_tradein not in [None, '', row.get('TradeInDate', None)] else row.get('TradeInDate', None)
-            valid_row['PostTime_EST'] = est_post if est_post not in [None, '', row.get('PostTime', None)] else row.get('PostTime', None)
-            valid_row['ResponseTime_EST'] = est_response if est_response not in [None, '', row.get('ResponseTime', None)] else row.get('ResponseTime', None)
+            valid_row['TradeInDateEST'] = est_tradein if est_tradein not in [None, '', row.get('TradeInDate', None)] else row.get('TradeInDate', None)
+            valid_row['PostTimeEST'] = est_post if est_post not in [None, '', row.get('PostTime', None)] else row.get('PostTime', None)
+            valid_row['ResponseTimeEST'] = est_response if est_response not in [None, '', row.get('ResponseTime', None)] else row.get('ResponseTime', None)
 
             columns = ','.join([k for k in valid_row.keys() if k])
             placeholders = ','.join(['?' for k in valid_row.keys() if k])
@@ -298,7 +341,7 @@ class VerizonTradeInETL:
             if not columns or not values or len(columns.split(',')) != len(values):
                 logging.warning(f"Skipping row due to column/value mismatch: {row}")
                 continue
-            cursor.execute(f"INSERT INTO verizon.RQTradeinReport_staging ({columns}) VALUES ({placeholders})", values)
+            cursor.execute(f"INSERT INTO verizon.RQTradeinReportStaging ({columns}) VALUES ({placeholders})", values)
             rows_loaded += 1
             rows_loaded += 1
         conn.commit()
@@ -312,18 +355,18 @@ class VerizonTradeInETL:
         try:
             merge_columns = [
                 'SaleInvoiceID', 'TradeInTransactionID', 'InvoiceIDByStore', 'InvoiceID', 'TradeInStatus', 'ItemID', 'ManufacturerModel', 'SerialNumber', 'StoreName', 'RegionName', 'TradeInDate',
-                'TradeInDate_EST', 'PostTime', 'PostTime_EST', 'ResponseTime', 'ResponseTime_EST',
+                'TradeInDateEST', 'PostTime', 'PostTimeEST', 'ResponseTime', 'ResponseTimeEST',
                 'PhoneRebateAmount', 'PromotionValue', 'PreDeviceValueAmount', 'PrePromotionValueAmount', 'TrackingNumber', 'OriginalTradeInvoiceID', 'OrderNumber', 'CreditApplicationNum',
                 'LocationCode', 'MasterOrderNumber', 'SequenceNumber', 'PromoValue', 'OrganicPrice', 'ComputedPrice', 'TradeInMobileNumber', 'SubmissionId', 'TradeInEquipMake', 'TradeInEquipCarrier',
                 'DeviceSku', 'TradeInDeviceId', 'LobType', 'OrderType', 'PurchaseDeviceId', 'TradeInAmount', 'AmountUsed', 'AmountPending', 'PromoCompletion', 'MobileNumber'
             ]
-            update_set = ',\n                '.join([f"target.{col} = source.{col}" for col in merge_columns]) + ",\n                target.ETLrowupdated = GETDATE()"
-            insert_cols = ', '.join(merge_columns + ['ETLrowinserted'])
+            update_set = ',\n                '.join([f"target.{col} = source.{col}" for col in merge_columns]) + ",\n                target.ETLRowUpdated = GETDATE()"
+            insert_cols = ', '.join(merge_columns + ['ETLRowInserted'])
             insert_vals = ', '.join([f"source.{col}" for col in merge_columns] + ['GETDATE()'])
             merge_sql = f'''
             WITH DedupedSource AS (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY SaleInvoiceID ORDER BY TradeInDate DESC) AS rn
-                FROM verizon.RQTradeinReport_staging
+                FROM verizon.RQTradeinReportStaging
             )
             MERGE verizon.RQTradeinReport AS target
             USING (SELECT * FROM DedupedSource WHERE rn = 1) AS source
@@ -345,11 +388,11 @@ class VerizonTradeInETL:
             cursor.execute("UPDATE verizon.RQTradeinReport SET PostTime = CASE WHEN TRY_CONVERT(datetime2(4), REPLACE(REPLACE(PostTime, 'T', ' '), 'Z', '')) IS NOT NULL THEN FORMAT(TRY_CONVERT(datetime2(4), REPLACE(REPLACE(PostTime, 'T', ' '), 'Z', '')), 'yyyy-MM-dd HH:mm:ss.ffff') ELSE PostTime END, ResponseTime = CASE WHEN TRY_CONVERT(datetime2(4), REPLACE(REPLACE(ResponseTime, 'T', ' '), 'Z', '')) IS NOT NULL THEN FORMAT(TRY_CONVERT(datetime2(4), REPLACE(REPLACE(ResponseTime, 'T', ' '), 'Z', '')), 'yyyy-MM-dd HH:mm:ss.ffff') ELSE ResponseTime END")
             conn.commit()
             # Get counts
-            inserted = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLrowinserted = CONVERT(date, GETDATE())").fetchval()
-            updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLrowupdated = CONVERT(date, GETDATE())").fetchval()
+            inserted = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowInserted = CONVERT(date, GETDATE())").fetchval()
+            updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowUpdated = CONVERT(date, GETDATE())").fetchval()
             logging.info(f"Merge complete. Inserted: {inserted}, Updated: {updated}")
             # Delete all records from staging table except those with today's date
-            cursor.execute("DELETE FROM verizon.RQTradeinReport_staging WHERE CONVERT(date, ETLrowinserted) <> CONVERT(date, GETDATE())")
+            cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, ETLRowInserted) <> CONVERT(date, GETDATE())")
             conn.commit()
             return {"inserted": inserted, "updated": updated}
         except Exception as e:
@@ -364,13 +407,13 @@ class VerizonTradeInETL:
             'LocationCode', 'MasterOrderNumber', 'SequenceNumber', 'PromoValue', 'OrganicPrice', 'ComputedPrice', 'TradeInMobileNumber', 'SubmissionId', 'TradeInEquipMake', 'TradeInEquipCarrier',
             'DeviceSku', 'TradeInDeviceId', 'LobType', 'OrderType', 'PurchaseDeviceId', 'TradeInAmount', 'AmountUsed', 'AmountPending', 'PromoCompletion', 'PostTime', 'ResponseTime', 'MobileNumber'
         ]
-        update_set = ',\n                '.join([f"target.{col} = source.{col}" for col in merge_columns]) + ",\n                target.ETLrowupdated = GETDATE()"
-        insert_cols = ', '.join(merge_columns + ['ETLrowinserted'])
+        update_set = ',\n                '.join([f"target.{col} = source.{col}" for col in merge_columns]) + ",\n                target.ETLRowUpdated = GETDATE()"
+        insert_cols = ', '.join(merge_columns + ['ETLRowInserted'])
         insert_vals = ', '.join([f"source.{col}" for col in merge_columns] + ['GETDATE()'])
         merge_sql = f'''
         WITH DedupedSource AS (
             SELECT *, ROW_NUMBER() OVER (PARTITION BY SaleInvoiceID ORDER BY TradeInDate DESC) AS rn
-            FROM verizon.RQTradeinReport_staging
+            FROM verizon.RQTradeinReportStaging
         )
         MERGE verizon.RQTradeinReport AS target
         USING (SELECT * FROM DedupedSource WHERE rn = 1) AS source
@@ -389,11 +432,11 @@ class VerizonTradeInETL:
         cursor.execute(merge_sql)
         conn.commit()
         # Get counts
-        inserted = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLrowinserted = CONVERT(date, GETDATE())").fetchval()
-        updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLrowupdated = CONVERT(date, GETDATE())").fetchval()
+        inserted = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowInserted = CONVERT(date, GETDATE())").fetchval()
+        updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowUpdated = CONVERT(date, GETDATE())").fetchval()
         logging.info(f"Merge complete. Inserted: {inserted}, Updated: {updated}")
         # Delete all records from staging table except those with today's date
-        cursor.execute("DELETE FROM verizon.RQTradeinReport_staging WHERE CONVERT(date, ETLrowinserted) <> CONVERT(date, GETDATE())")
+        cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, ETLRowInserted) <> CONVERT(date, GETDATE())")
         conn.commit()
         return {"inserted": inserted, "updated": updated}
 
@@ -453,15 +496,15 @@ class VerizonTradeInETL:
                 'DeviceSku', 'TradeInDeviceId', 'LobType', 'OrderType', 'PurchaseDeviceId', 'TradeInAmount', 'AmountUsed', 'AmountPending', 'PromoCompletion', 'PostTime', 'ResponseTime', 'MobileNumber'
             ]
             # Format PostTime and ResponseTime columns in staging table before merge, safely using TRY_CONVERT
-            cursor.execute("UPDATE verizon.RQTradeinReport_staging SET PostTime = CASE WHEN TRY_CONVERT(datetime, PostTime) IS NOT NULL THEN FORMAT(SWITCHOFFSET(CONVERT(datetimeoffset, TRY_CONVERT(datetime, PostTime)), '-05:00'), 'MMM dd, yyyy HH:mm:ss') ELSE PostTime END, ResponseTime = CASE WHEN TRY_CONVERT(datetime, ResponseTime) IS NOT NULL THEN FORMAT(SWITCHOFFSET(CONVERT(datetimeoffset, TRY_CONVERT(datetime, ResponseTime)), '-05:00'), 'MMM dd, yyyy HH:mm:ss') ELSE ResponseTime END")
+            cursor.execute("UPDATE verizon.RQTradeinReportStaging SET PostTime = CASE WHEN TRY_CONVERT(datetime, PostTime) IS NOT NULL THEN FORMAT(SWITCHOFFSET(CONVERT(datetimeoffset, TRY_CONVERT(datetime, PostTime)), '-05:00'), 'MMM dd, yyyy HH:mm:ss') ELSE PostTime END, ResponseTime = CASE WHEN TRY_CONVERT(datetime, ResponseTime) IS NOT NULL THEN FORMAT(SWITCHOFFSET(CONVERT(datetimeoffset, TRY_CONVERT(datetime, ResponseTime)), '-05:00'), 'MMM dd, yyyy HH:mm:ss') ELSE ResponseTime END")
             conn.commit()
-            update_set = ',\n                '.join([f"target.{col} = source.{col}" for col in merge_columns]) + ",\n                target.ETLrowupdated = GETDATE()"
-            insert_cols = ', '.join(merge_columns + ['ETLrowinserted'])
+            update_set = ',\n                '.join([f"target.{col} = source.{col}" for col in merge_columns]) + ",\n                target.ETLRowUpdated = GETDATE()"
+            insert_cols = ', '.join(merge_columns + ['ETLRowInserted'])
             insert_vals = ', '.join([f"source.{col}" for col in merge_columns] + ['GETDATE()'])
             merge_sql = f'''
             WITH DedupedSource AS (
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY SaleInvoiceID ORDER BY TradeInDate DESC) AS rn
-                FROM verizon.RQTradeinReport_staging
+                FROM verizon.RQTradeinReportStaging
             )
             MERGE verizon.RQTradeinReport AS target
             USING (SELECT * FROM DedupedSource WHERE rn = 1) AS source
@@ -486,11 +529,11 @@ class VerizonTradeInETL:
             cursor.execute("UPDATE verizon.RQTradeinReport SET PostTime = CASE WHEN TRY_CONVERT(datetime, PostTime) IS NOT NULL THEN FORMAT(SWITCHOFFSET(CONVERT(datetimeoffset, TRY_CONVERT(datetime, PostTime)), '-05:00'), 'MMM dd, yyyy HH:mm:ss') ELSE PostTime END, ResponseTime = CASE WHEN TRY_CONVERT(datetime, ResponseTime) IS NOT NULL THEN FORMAT(SWITCHOFFSET(CONVERT(datetimeoffset, TRY_CONVERT(datetime, ResponseTime)), '-05:00'), 'MMM dd, yyyy HH:mm:ss') ELSE ResponseTime END")
             conn.commit()
             # Get counts
-            inserted = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLrowinserted = CONVERT(date, GETDATE())").fetchval()
-            updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLrowupdated = CONVERT(date, GETDATE())").fetchval()
+            inserted = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowInserted = CONVERT(date, GETDATE())").fetchval()
+            updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowUpdated = CONVERT(date, GETDATE())").fetchval()
             logging.info(f"Merge complete. Inserted: {inserted}, Updated: {updated}")
             # Delete all records from staging table except those with today's date
-            cursor.execute("DELETE FROM verizon.RQTradeinReport_staging WHERE CONVERT(date, ETLrowinserted) <> CONVERT(date, GETDATE())")
+            cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, ETLRowInserted) <> CONVERT(date, GETDATE())")
             conn.commit()
             return {"inserted": inserted, "updated": updated}
         except Exception as e:
