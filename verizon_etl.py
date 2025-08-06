@@ -132,7 +132,9 @@ class VerizonTradeInETL:
         column_migrations = [
             ("TradeInDate_EST", "TradeInDateEST"),
             ("PostTime_EST", "PostTimeEST"), 
-            ("ResponseTime_EST", "ResponseTimeEST")
+            ("ResponseTime_EST", "ResponseTimeEST"),
+            ("ETLRowInserted", "ETLRowInserted"),
+            ("ETLRowUpdated", "ETLRowUpdated")
         ]
         
         for old_col, new_col in column_migrations:
@@ -392,7 +394,7 @@ class VerizonTradeInETL:
             updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowUpdated = CONVERT(date, GETDATE())").fetchval()
             logging.info(f"Merge complete. Inserted: {inserted}, Updated: {updated}")
             # Delete all records from staging table except those with today's date
-            cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, ETLRowInserted) <> CONVERT(date, GETDATE())")
+            cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, TradeInDate) <> CONVERT(date, GETDATE())")
             conn.commit()
             return {"inserted": inserted, "updated": updated}
         except Exception as e:
@@ -436,7 +438,7 @@ class VerizonTradeInETL:
         updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowUpdated = CONVERT(date, GETDATE())").fetchval()
         logging.info(f"Merge complete. Inserted: {inserted}, Updated: {updated}")
         # Delete all records from staging table except those with today's date
-        cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, ETLRowInserted) <> CONVERT(date, GETDATE())")
+        cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, TradeInDate) <> CONVERT(date, GETDATE())")
         conn.commit()
         return {"inserted": inserted, "updated": updated}
 
@@ -533,7 +535,7 @@ class VerizonTradeInETL:
             updated = cursor.execute("SELECT COUNT(*) FROM verizon.RQTradeinReport WHERE ETLRowUpdated = CONVERT(date, GETDATE())").fetchval()
             logging.info(f"Merge complete. Inserted: {inserted}, Updated: {updated}")
             # Delete all records from staging table except those with today's date
-            cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, ETLRowInserted) <> CONVERT(date, GETDATE())")
+            cursor.execute("DELETE FROM verizon.RQTradeinReportStaging WHERE CONVERT(date, TradeInDate) <> CONVERT(date, GETDATE())")
             conn.commit()
             return {"inserted": inserted, "updated": updated}
         except Exception as e:
